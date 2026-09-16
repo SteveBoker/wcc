@@ -74,7 +74,7 @@ wccPlot <- function(inSeries1=NA, inSeries2=NA, startwindow=1, endwindow=200, wM
     # Extract the matrix of correlations into the format desired by image().
 
     plotColumns <- (endwindow - startwindow) + 1
-    theX <- wMax + tMax + (seq(startwindow, endwindow, by=1) * wInc / samplespersecond)
+    theX <- (wMax + tMax + seq(startwindow, endwindow, by=1)) * wInc / samplespersecond
     theY <- seq(-floor(wccRows/2),floor(wccRows/2), by=1) * tInc / samplespersecond
     theWCC <- matrix(NA, length(theY), length(theX))
     i <- 1
@@ -99,10 +99,10 @@ wccPlot <- function(inSeries1=NA, inSeries2=NA, startwindow=1, endwindow=200, wM
          ylab="Lag Offset (seconds)",
          cex.lab=1.75, cex.axis=1.5, cex.main=1.75, 
          cex=1.75, mgp=c(2.5,.75,0),zlim=c(-1,1))
-    lines(wMax + tMax + c(startwindow:endwindow) * wInc / samplespersecond, 
+    lines((wMax + tMax + c(startwindow:endwindow) * wInc) / samplespersecond, 
           -ppOut$maxIndex[startwindow:endwindow] * tInc / samplespersecond, 
           type='l', lwd=2)
-    lines(wMax + tMax + c(startwindow * wInc / samplespersecond, endwindow * wInc / samplespersecond), c(0,0), type='l', lty=2, lwd=2)
+    lines(c((wMax + tMax + startwindow * wInc) / samplespersecond, (wMax + tMax + endwindow * wInc) / samplespersecond), c(0,0), type='l', lty=2, lwd=2)
 
     par(mar = c(5, 1, 2, 3))  # adjust margins
     image(x = 1,
