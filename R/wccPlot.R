@@ -67,6 +67,23 @@ wccPlot <- function(inSeries1=NA, inSeries2=NA, startwindow=1, endwindow=200, wM
     wccColumns <- dim(wccMatrix)[1]
     wccRows <- dim(wccMatrix)[2]
 
+    # ----------------------------------
+    # Check whether startwindow and endwindow are possible given wccColumns.
+
+    if (startwindow < 1 ) {
+        stop(paste0("Warning: startwindow must be greater than or equal to 1"))
+    }
+    if (startwindow < 1 | startwindow > wccColumns ) {
+        stop(paste0("Warning: startwindow must be less than the total number of WCC windows, " wccColumns))
+    }
+
+    if (endwindow < startwindow ) {
+        stop(paste0("Warning: endwindow must be greater than startwindow"))
+    }
+    if (startwindow < 1 | startwindow > wccColumns ) {
+        stop(paste0("Warning: endwindow must be less than or equal to the total number of WCC windows, " wccColumns))
+    }
+
     ppOut <- wccPeakPick(wccMatrix, Lsize=Lsize, pspan=pspan, type=type)
     ppOut$maxIndex <- ppOut$maxIndex*.5
 
