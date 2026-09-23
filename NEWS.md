@@ -1,6 +1,21 @@
+# ------- Version 0.4.2 -------
+
+2026-09-23  Steven Boker  <smb3u@virginia.edu>
+
+    Bug fixes: 
+    1. Added warning to wccPlot when requested startwindow or endwindow is out of range.
+
+    Manual edits and additions:
+    1. wccTestSurrogateDyads
+    
+    Additions:
+    1. Added function wccTestSurrogateDyads which is just a convenience wrapper for
+       wccFindDyadParam.  This will be used when people have found a set of parameters
+       and now want to test their data against surrogates.
+    
 # ------- Version 0.4.0 -------
 
-2026-04-15  Steven Boker  <smb3u@virginia.edu>
+2026-07-12  Steven Boker  <smb3u@virginia.edu>
 
     Bug fixes:
     1. Compiled and R versions of wccCalc now agree on last elapsed time calculation when wInc != 1
