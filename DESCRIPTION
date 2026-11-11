@@ -45,6 +45,7 @@ Collate:
     'wccPeakPick.R'
     'wccPlot.R'
     'wccSurrogateDyads.R'
+    'wccSymmetry.R'
     'wccTestSurrogateDyads.R'
 Biarch: true
 Version: 0.4.2

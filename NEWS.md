@@ -1,3 +1,28 @@
+# ------- Development (unreleased) -------
+
+2026-11-11  Steven Boker  <smb3u@virginia.edu>
+
+    Changes:
+    1. wccZeroChangeDirections() has a new default method, "shift", which compares the lag profile
+       one window length apart and finds the single shift in lag that best explains the change.
+       The original method is available as method="gradient".  On 10000 simulated dyads with known
+       symmetry epochs (SymmetryEpochTest-261111.R) the shift method found the epochs far more
+       accurately.  New output columns: peakCorrelation, peakLag, peakSharpness.
+    2. wccSymmetryEpochs() reports estimated startTime and endTime of each epoch in the time series
+       (formation and breaking times corrected for the delay with which windows see a change), and
+       per-epoch peakCorrelation, peakLag, peakLagStability, and peakSharpness.  Defaults for
+       threshold, smoothWidth, minDuration, and maxGap were tuned on the simulated dyads.
+
+2026-11-06  Steven Boker  <smb3u@virginia.edu>
+
+    Additions:
+    1. wccZeroChangeDirections()  For each window of a WCC matrix, calculates the direction of
+       zero change (the isobar) at every lag and the dispersion of those directions across lags.
+       Low dispersion indicates symmetry: a lag profile that is stationary or drifting uniformly in lag.
+    2. wccSymmetryEpochs()  Estimates the elapsed times of symmetry formation and symmetry breaking
+       from the dispersion returned by wccZeroChangeDirections().
+    3. tests/testWccSymmetry.R
+
 # ------- Version 0.4.2 -------
 
 2026-09-23  Steven Boker  <smb3u@virginia.edu>
