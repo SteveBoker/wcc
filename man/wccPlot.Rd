@@ -25,7 +25,7 @@ This function plots a Windowed Cross Correlation heatmap.
 \usage{
 wccPlot(inSeries1=NA, inSeries2=NA, startwindow=1, endwindow=200, wMax=50, tMax=50,
     wInc=1, tInc=1, Lsize=8, pspan=.25, type="Max", samplespersecond=1,
-    method=c("c", "cumr", "cumc", "r"), ...)
+    method=c("c", "cumr", "cumc", "cumcuda", "r"), ...)
 }
 
 \arguments{
@@ -41,7 +41,7 @@ wccPlot(inSeries1=NA, inSeries2=NA, startwindow=1, endwindow=200, wMax=50, tMax=
 \item{pspan}{A numeric specifying the amount of smoothing applied by the \link{loess} function within \code{wccPeakPick}  (default=.25).}
 \item{type}{A character string indicating whether a maximum, \sQuote{Max}, or minimum, \sQuote{Min}, should be detected by \code{wccPeakPick} (default=\sQuote{Max}). If type=\sQuote{Zero} then a topographic map is generated rather than a line from wccPeakPick\code{wccPeakPick}.}
 \item{samplespersecond}{A numeric indicating the sampling rate of the time series.  This will determine the units of the first derivative aggregate statistics. (default=1)}
-\item{method}{Backend passed through to \code{\link{wccCalc}}: \code{"c"} (default, original compiled windcross), \code{"r"} (original pure-R loop), \code{"cumc"} (cumulative-sum C backend), or \code{"cumr"} (cumulative-sum pure-R reference).  See \code{\link{wccCalc}} for details and the missing-data caveat for the \code{cum*} methods.}
+\item{method}{Backend passed through to \code{\link{wccCalc}}: \code{"c"} (default, original compiled windcross), \code{"r"} (original pure-R loop), \code{"cumc"} (cumulative-sum C backend), \code{"cumr"} (cumulative-sum pure-R reference), or \code{"cumcuda"} (cumulative-sum CUDA backend, requires a CUDA-enabled build).  See \code{\link{wccCalc}} for details and the missing-data caveat for the \code{cum*} methods.}
 \item{...}{Reserved for the deprecated \code{windcross=TRUE/FALSE} argument, mapped to \code{method="c"} / \code{method="r"} with a warning.}
 }
 

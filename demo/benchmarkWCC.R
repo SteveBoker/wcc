@@ -1,9 +1,9 @@
 # ---------------------------------------------------------------------
 # Program: benchmarkWCC.R
 #
-# Benchmarks the wccCalc backends ("cumr", "cumc", "c", "r") on sine-
-# mixture series as in testSine.R, and reports timings and speedups
-# relative to the original C implementation ("c").
+# Benchmarks the wccCalc backends ("cumr", "cumc", "cumcuda", "c", "r")
+# on sine-mixture series as in testSine.R, and reports timings and
+# speedups relative to the original C implementation ("c").
 #
 # The slow legacy methods ("c", "r") are skipped for the largest series.
 # ---------------------------------------------------------------------
@@ -16,7 +16,12 @@ makeSeries <- function(n) {
     sin(c(1:n)/runif(1, min=5, max=20)) + rnorm(n, mean=0, sd=.5)
 }
 
-methods <- c("cumr", "cumc", "c", "r")
+cudaAvailable <- tryCatch({
+    wccCalc(rnorm(200), rnorm(200), wMax=20, tMax=20, method="cumcuda")
+    TRUE
+}, error = function(e) FALSE)
+
+methods <- c("cumr", "cumc", if (cudaAvailable) "cumcuda", "c", "r")
 
 lengths <- c(1e3, 1e4, 1e5)
 params <- expand.grid(wMax=c(50, 100), tMax=c(50, 100))
@@ -51,15 +56,18 @@ print(speedup, digits=3)
 # ----------------------------------
 # Batched backend vs a loop of single-dyad calls.
 
+batchMethods <- c("cumc", if (cudaAvailable) "cumcuda")
 cat("\nBatched wccCalcBatch vs single-dyad loop (wMax=tMax=50):\n")
 for (D in c(100, 500)) {
     for (n in c(1000, 5000)) {
         arr1 <- t(sapply(1:D, function(i) makeSeries(n)))
         arr2 <- t(sapply(1:D, function(i) makeSeries(n)))
         tLoop <- system.time(for (i in 1:D) wccCalc(arr1[i,], arr2[i,], wMax=50, tMax=50, method="cumc"))["elapsed"]
-        tBatch <- system.time(wccCalcBatch(arr1, arr2, wMax=50, tMax=50, method="cumc"))["elapsed"]
-        cat(sprintf("D=%4d n=%5d cumc    : batch=%.2fs  loop(cumc)=%.2fs  speedup=%.1fx\n",
-                    D, n, tBatch, tLoop, tLoop / tBatch))
+        for (m in batchMethods) {
+            tBatch <- system.time(wccCalcBatch(arr1, arr2, wMax=50, tMax=50, method=m))["elapsed"]
+            cat(sprintf("D=%4d n=%5d %-8s: batch=%.2fs  loop(cumc)=%.2fs  speedup=%.1fx\n",
+                        D, n, m, tBatch, tLoop, tLoop / tBatch))
+        }
     }
 }
 

@@ -1,0 +1,460 @@
+---
+title: "End-to-end WCC + peak-pick speedup: cumc, cumcuda vs legacy"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{End-to-end WCC + peak-pick speedup: cumc, cumcuda vs legacy}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment  = "#>",
+  cache    = FALSE
+)
+```
+
+This vignette measures the end-to-end speedup of the recent `wcc`
+rewrite — **including the time to compute the WCC grids themselves** —
+on a single simulated dataset chosen to be favorable to the GPU
+backend (many dyads, moderately long series). The comparison is:
+
+- **Legacy pipeline** — original C backend for the WCC
+  (`wccCalc(..., method = "c")`, i.e. `windcross`), followed by the
+  original per-row `loess() + spline()` peak picker, embedded verbatim
+  below as `wccPeakPickLegacy`. Both steps are looped over dyads in R.
+- **`cumc` pipeline** — new cumulative-sum C backend, batched
+  (`wccCalcBatch(..., method = "cumc")`), followed by the new
+  matrix-smoother peak picker (`wccPeakPickBatch(..., method = "cumc")`).
+- **`cumcuda` pipeline** — new cumulative-sum CUDA backend, batched
+  (`wccCalcBatch(..., method = "cumcuda")`), followed by the CUDA
+  batched peak picker (`wccPeakPickBatch(..., method = "cumcuda")`).
+- **`cumcuda` FP32 pipeline** — same as above with
+  `precision = "single"`: all device arithmetic runs in FP32, which on
+  consumer GPUs (whose FP64 throughput is 1/32–1/64 of FP32) unlocks
+  most of the card. Results are accurate to roughly `1e-5` instead of
+  machine precision.
+- **fused pipeline** — `wccCalcPeakBatch(..., method = "cumcuda")`:
+  both stages in one call, with the WCC grids resident on the GPU
+  throughout. The two-step GPU pipeline downloads the full
+  `nRow × nCol × P` grid array to R, zeroes the NAs there, and uploads
+  it again for the smoother GEMM; at this problem size that round trip
+  dominates the runtime, which is also why FP32 alone barely moves the
+  two-step numbers. The fused call transfers only the small
+  `nRow × P` index and value matrices. Timed in FP64 and FP32.
+
+Both stages of each pipeline are inside the `system.time()` block, so
+the reported numbers reflect what a user of `wccFindDyadParam` or a
+similar batched analysis will actually feel.
+
+```{r libraries}
+library(wcc)
+set.seed(20260701)
+```
+
+## The legacy reference
+
+To make the accuracy claim verifiable inside the vignette, we embed the
+original per-row peak-pick implementation as `wccPeakPickLegacy`. It is
+bit-identical to the `wccPeakPick` that shipped in `wcc` prior to the
+refactor, minus the dead plotting code. The legacy pipeline then loops
+over dyads calling `wccCalc(..., method = "c")` and passing the result
+to `wccPeakPickLegacy`.
+
+```{r legacy_defs}
+wccPeakPickLegacy <- function(tAllCor = NA, Lsize = 8, pspan = .25, type = "Max") {
+    colLen <- length(tAllCor[1, ])
+    rowLen <- length(tAllCor[, 1])
+    mx <- rep(NA, (2 * colLen - 1))
+    tIndex <- rep(NA, rowLen)
+    tValue <- rep(NA, rowLen)
+    findMin <- (type == "Min" || type == "min")
+    for (rowNo in seq_len(rowLen)) {
+        if (any(is.na(tAllCor[rowNo, ]))) next
+        tCor <- tAllCor[rowNo, ]
+        t1 <- predict(loess(tCor ~ c(1:colLen), degree = 2, span = pspan))
+        t2 <- spline(c(1:colLen), t1, n = (2 * colLen - 1))$y
+        windowWidth <- 0
+        lookAhead <- 0
+        for (j in 1:(colLen - 1)) {
+            windowWidth <- windowWidth + 1
+            tSelect <- (colLen - windowWidth):(colLen + windowWidth)
+            mx[j] <- if (findMin) min(t2[tSelect], na.rm = TRUE) else max(t2[tSelect], na.rm = TRUE)
+            if (j == 1) mmx <- mx[j]
+            else {
+                better <- if (findMin) (mx[j] < mmx) else (mx[j] > mmx)
+                if (better) { lookAhead <- 0; mmx <- mx[j] }
+                else {
+                    lookAhead <- lookAhead + 1
+                    if (lookAhead >= Lsize) break
+                }
+            }
+        }
+        Index <- match(mmx, t2[tSelect]) + tSelect[1] - 1
+        position <- Index - colLen
+        if (position > (colLen - Lsize - 1) || position < (-(colLen - Lsize - 1))) {
+            tIndex[rowNo] <- NA
+            tValue[rowNo] <- NA
+        } else {
+            tIndex[rowNo] <- position
+            tValue[rowNo] <- mmx
+        }
+    }
+    if (findMin) list(minIndex = tIndex, minValue = tValue)
+    else list(maxIndex = tIndex, maxValue = tValue)
+}
+
+legacyPipeline <- function(arr1, arr2, wMax, tMax, Lsize, pspan) {
+    D <- nrow(arr1)
+    index <- vector("list", D)
+    value <- vector("list", D)
+    for (p in seq_len(D)) {
+        grid <- wccCalc(arr1[p, ], arr2[p, ], wMax = wMax, tMax = tMax,
+                        method = "c")
+        grid[is.na(grid)] <- 0
+        pp <- wccPeakPickLegacy(grid, Lsize = Lsize, pspan = pspan, type = "Max")
+        index[[p]] <- pp$maxIndex
+        value[[p]] <- pp$maxValue
+    }
+    list(index = do.call(cbind, index),
+         value = do.call(cbind, value))
+}
+```
+
+## A dataset favorable to CUDA
+
+CUDA's batched backend pays off when there are many dyads (large
+`P = D`) and moderately long series. The GPU launches one thread block
+per (pair, output column) for WCC, and one strided-batched GEMM plus
+one thread per (slab, row) for peak picking. Both stages saturate the
+GPU only above a minimum problem size.
+
+```{r params}
+D      <- 40      # number of dyads (= number of slabs P)
+n      <- 2000    # samples per series
+wMax   <- 60      # window size
+tMax   <- 60      # maximum lag
+Lsize  <- 8
+pspan  <- 0.25
+```
+
+Simulate `D` pairs of noisy sinusoids and stack them as `D x n`
+matrices.
+
+```{r simulate}
+makeSeries <- function(n) {
+    sin(seq_len(n) / runif(1, min = 5, max = 20)) + rnorm(n, sd = 0.5)
+}
+
+arr1 <- t(sapply(seq_len(D), function(i) makeSeries(n)))
+arr2 <- t(sapply(seq_len(D), function(i) makeSeries(n)))
+```
+
+## Detect the CUDA build
+
+```{r cuda_probe}
+cudaAvailable <- tryCatch({
+    wccCalc(rnorm(200), rnorm(200), wMax = 20, tMax = 20, method = "cumcuda")
+    TRUE
+}, error = function(e) FALSE)
+cat("CUDA backend available:", cudaAvailable, "\n")
+```
+
+## Warm-up
+
+Every backend is called once on a tiny input before measurement so the
+matrix-smoother cache (`wccSmoothMatrix`), any lazy compilation, and
+CUDA context setup do not contaminate timings.
+
+```{r warm}
+invisible(legacyPipeline(arr1[1:2, , drop = FALSE], arr2[1:2, , drop = FALSE],
+                          wMax = wMax, tMax = tMax, Lsize = Lsize, pspan = pspan))
+invisible({
+    g <- wccCalcBatch(arr1[1:2, ], arr2[1:2, ], wMax = wMax, tMax = tMax,
+                      method = "cumc")
+    g[is.na(g)] <- 0
+    wccPeakPickBatch(g, Lsize = Lsize, pspan = pspan, type = "Max",
+                     method = "cumc")
+})
+if (cudaAvailable) {
+    invisible({
+        g <- wccCalcBatch(arr1[1:2, ], arr2[1:2, ], wMax = wMax, tMax = tMax,
+                          method = "cumcuda")
+        g[is.na(g)] <- 0
+        wccPeakPickBatch(g, Lsize = Lsize, pspan = pspan, type = "Max",
+                         method = "cumcuda")
+    })
+    invisible({
+        g <- wccCalcBatch(arr1[1:2, ], arr2[1:2, ], wMax = wMax, tMax = tMax,
+                          method = "cumcuda", precision = "single")
+        g[is.na(g)] <- 0
+        wccPeakPickBatch(g, Lsize = Lsize, pspan = pspan, type = "Max",
+                         method = "cumcuda", precision = "single")
+    })
+    invisible(wccCalcPeakBatch(arr1[1:2, ], arr2[1:2, ], wMax = wMax, tMax = tMax,
+                               Lsize = Lsize, pspan = pspan, type = "Max",
+                               method = "cumcuda"))
+    invisible(wccCalcPeakBatch(arr1[1:2, ], arr2[1:2, ], wMax = wMax, tMax = tMax,
+                               Lsize = Lsize, pspan = pspan, type = "Max",
+                               method = "cumcuda", precision = "single"))
+}
+```
+
+## Timing the three pipelines end-to-end
+
+Each timing block covers **both** the WCC computation and the peak
+picking — the two stages a user runs to get from raw series to per-
+dyad `(lag, correlation)` peaks.
+
+**Legacy: `wccCalc(method = "c")` + per-row `loess + spline`, looped**
+
+```{r time_legacy}
+tLegacy <- system.time({
+    legacyOut <- legacyPipeline(arr1, arr2,
+                                 wMax = wMax, tMax = tMax,
+                                 Lsize = Lsize, pspan = pspan)
+})["elapsed"]
+tLegacy
+```
+
+**`cumc`: `wccCalcBatch(method = "cumc")` + `wccPeakPickBatch(method = "cumc")`**
+
+```{r time_cumc}
+tCumc <- system.time({
+    gCumc <- wccCalcBatch(arr1, arr2, wMax = wMax, tMax = tMax, method = "cumc")
+    gCumc[is.na(gCumc)] <- 0
+    outCumc <- wccPeakPickBatch(gCumc, Lsize = Lsize, pspan = pspan,
+                                 type = "Max", method = "cumc")
+})["elapsed"]
+tCumc
+```
+
+**`cumcuda`: `wccCalcBatch(method = "cumcuda")` + `wccPeakPickBatch(method = "cumcuda")`**
+
+```{r time_cumcuda}
+if (cudaAvailable) {
+    tCumcuda <- system.time({
+        gCumcuda <- wccCalcBatch(arr1, arr2, wMax = wMax, tMax = tMax,
+                                  method = "cumcuda")
+        gCumcuda[is.na(gCumcuda)] <- 0
+        outCumcuda <- wccPeakPickBatch(gCumcuda, Lsize = Lsize, pspan = pspan,
+                                        type = "Max", method = "cumcuda")
+    })["elapsed"]
+} else {
+    tCumcuda <- NA_real_
+    outCumcuda <- NULL
+}
+tCumcuda
+```
+
+**`cumcuda` FP32: the same GPU pipeline with `precision = "single"`**
+
+```{r time_cumcuda32}
+if (cudaAvailable) {
+    tCumcuda32 <- system.time({
+        gCumcuda32 <- wccCalcBatch(arr1, arr2, wMax = wMax, tMax = tMax,
+                                    method = "cumcuda", precision = "single")
+        gCumcuda32[is.na(gCumcuda32)] <- 0
+        outCumcuda32 <- wccPeakPickBatch(gCumcuda32, Lsize = Lsize, pspan = pspan,
+                                          type = "Max", method = "cumcuda",
+                                          precision = "single")
+    })["elapsed"]
+} else {
+    tCumcuda32 <- NA_real_
+    outCumcuda32 <- NULL
+}
+tCumcuda32
+```
+
+**Fused: `wccCalcPeakBatch(method = "cumcuda")` — grid stays on the GPU**
+
+```{r time_fused}
+if (cudaAvailable) {
+    tFused <- system.time({
+        outFused <- wccCalcPeakBatch(arr1, arr2, wMax = wMax, tMax = tMax,
+                                     Lsize = Lsize, pspan = pspan,
+                                     type = "Max", method = "cumcuda")
+    })["elapsed"]
+} else {
+    tFused <- NA_real_
+    outFused <- NULL
+}
+tFused
+```
+
+**Fused FP32: `wccCalcPeakBatch(..., precision = "single")`**
+
+```{r time_fused32}
+if (cudaAvailable) {
+    tFused32 <- system.time({
+        outFused32 <- wccCalcPeakBatch(arr1, arr2, wMax = wMax, tMax = tMax,
+                                       Lsize = Lsize, pspan = pspan,
+                                       type = "Max", method = "cumcuda",
+                                       precision = "single")
+    })["elapsed"]
+} else {
+    tFused32 <- NA_real_
+    outFused32 <- NULL
+}
+tFused32
+```
+
+## Correctness
+
+The two new pipelines should reproduce the legacy output up to
+floating-point noise. Peak indices are integer-valued and must match
+exactly; peak values sit at machine epsilon on the CPU path and at
+low-order double precision on the GPU path (the strided-batched GEMM
+accumulates in a different order than the R + BLAS smoother).
+
+```{r verify}
+maxAbsDiff <- function(a, b) {
+    stopifnot(length(a) == length(b))
+    naA <- is.na(a); naB <- is.na(b)
+    stopifnot(all(naA == naB))
+    max(abs(a - b), na.rm = TRUE)
+}
+
+cat(sprintf("legacy vs cumc:    max |Δ index| = %.2e   max |Δ value| = %.2e\n",
+            maxAbsDiff(legacyOut$index, outCumc$index),
+            maxAbsDiff(legacyOut$value, outCumc$value)))
+
+if (cudaAvailable) {
+    cat(sprintf("legacy vs cumcuda: max |Δ index| = %.2e   max |Δ value| = %.2e\n",
+                maxAbsDiff(legacyOut$index, outCumcuda$index),
+                maxAbsDiff(legacyOut$value, outCumcuda$value)))
+}
+```
+
+The FP32 pipeline trades machine precision for speed: peak *values*
+agree with the FP64 result to about `1e-5`, and peak *indices* match
+except on near-ties, where the picked position can shift by one
+half-step.
+
+```{r verify32}
+if (cudaAvailable) {
+    idxShift <- sum(abs(outCumcuda32$index - legacyOut$index) > 0, na.rm = TRUE)
+    cat(sprintf("legacy vs cumcuda FP32: max |Δ value| = %.2e   shifted indices: %d/%d\n",
+                max(abs(legacyOut$value - outCumcuda32$value), na.rm = TRUE),
+                idxShift, sum(!is.na(legacyOut$index))))
+}
+```
+
+The fused pipeline computes the same quantities as the two-step GPU
+pipeline (with the `NA → 0` substitution applied on the device), so it
+must agree with it — exactly in FP64, and up to the same near-tie
+caveat in FP32.
+
+```{r verify_fused}
+if (cudaAvailable) {
+    cat(sprintf("legacy vs fused:   max |Δ index| = %.2e   max |Δ value| = %.2e\n",
+                maxAbsDiff(legacyOut$index, outFused$index),
+                maxAbsDiff(legacyOut$value, outFused$value)))
+    idxShiftF <- sum(abs(outFused32$index - legacyOut$index) > 0, na.rm = TRUE)
+    cat(sprintf("legacy vs fused FP32: max |Δ value| = %.2e   shifted indices: %d/%d\n",
+                max(abs(legacyOut$value - outFused32$value), na.rm = TRUE),
+                idxShiftF, sum(!is.na(legacyOut$index))))
+}
+```
+
+## Speedup summary
+
+```{r summary_table, results='asis'}
+tab <- data.frame(
+    pipeline = c("legacy: windcross + loess+spline peak-pick (looped)",
+                 "cumc: wccCalcBatch + wccPeakPickBatch (CPU)",
+                 "cumcuda: wccCalcBatch + wccPeakPickBatch (GPU, FP64)",
+                 "cumcuda FP32: same with precision = \"single\"",
+                 "fused: wccCalcPeakBatch (GPU, FP64, grid stays on device)",
+                 "fused FP32: wccCalcPeakBatch with precision = \"single\""),
+    elapsed_s = c(tLegacy, tCumc, tCumcuda, tCumcuda32, tFused, tFused32),
+    speedup_vs_legacy = c(1, tLegacy / tCumc,
+                          if (cudaAvailable) tLegacy / tCumcuda else NA_real_,
+                          if (cudaAvailable) tLegacy / tCumcuda32 else NA_real_,
+                          if (cudaAvailable) tLegacy / tFused else NA_real_,
+                          if (cudaAvailable) tLegacy / tFused32 else NA_real_)
+)
+knitr::kable(tab, digits = c(0, 2, 1),
+             caption = sprintf(
+                 "End-to-end WCC + peak-pick time on D=%d dyads, n=%d, wMax=tMax=%d",
+                 D, n, wMax))
+```
+
+Two sources of speedup are stacked in these numbers:
+
+1. **`wccCalc` → `wccCalcBatch(method = "cumc")`**. The cumulative-sum
+   algorithm makes each WCC cell an `O(1)` prefix-sum difference, so
+   the total cost per dyad is independent of `wMax`. On top of that,
+   the batched form computes each series' prefix sums once and shares
+   them across all pairs, and parallelizes pair iteration with OpenMP.
+2. **legacy peak-pick → `wccPeakPickBatch(method = "cumc")`**. The
+   `loess(degree = 2) + spline` smoother at fixed predictor positions
+   is a fixed linear operator: a single `(2·colLen − 1) × colLen`
+   matrix that depends only on `(colLen, pspan)`. `wccSmoothMatrix`
+   builds and caches it; all rows of all slabs are then smoothed with
+   one matrix product instead of one `loess` fit per row.
+
+`cumcuda` adds a third layer: both stages run on the GPU, with
+per-series prefix-sum scans in shared memory, one CUDA thread block
+per (pair, output column) for the WCC kernel, one
+`cublasDgemmStridedBatched` call for the batched smoother, and one
+thread per (slab, row) for the peak search. Only the small
+`P × nRow` index and value arrays cross back to the host.
+
+`precision = "single"` adds a fourth layer on top of `cumcuda`: the
+inputs are narrowed to FP32 on the host (halving PCIe traffic and
+device memory), all kernels run in float, and the smoother GEMM becomes
+`cublasSgemmStridedBatched`. On consumer cards, where FP64 units are
+scarce, this raises the arithmetic ceiling — but as the two-step
+numbers above show, arithmetic is not the bottleneck at this problem
+size, so FP32 alone changes little.
+
+The **fused** `wccCalcPeakBatch` removes that bottleneck. In the
+two-step GPU pipeline the full grid array (`nRow × nCol × P` doubles,
+tens of MB here) is downloaded to R, scanned for NAs, and uploaded
+again — three passes over PCIe plus two host-side loops, for data the
+GPU already had. The fused call keeps the grids resident on the device
+(zero-variance cells are written as `0` directly, matching the
+`g[is.na(g)] <- 0` convention), runs the smoother GEMM and peak search
+in place, and downloads only the `nRow × P` index and value matrices.
+The backend also reuses its device buffers, cuBLAS handle, and pinned
+transfer staging across calls, which matters for repeated invocations
+in a parameter search. With transfers out of the way, FP32 finally has
+something to accelerate, which is why the fused FP32 row shows the
+largest gain.
+
+## What determines your numbers
+
+Absolute timings depend heavily on:
+
+- **`D` (number of dyads)** — the CUDA backend needs enough parallel
+  work to saturate the device. Below `D ≈ 10` the CPU batched path
+  may already be competitive; above `D ≈ 100` the GPU tends to pull
+  ahead.
+- **`n` (series length)** — longer series make the CUDA per-series
+  prefix-sum scan more efficient relative to launch overhead.
+- **CPU threads for `cumc`** — the batched C backend uses OpenMP over
+  the pair loop. On a single-core CI runner the CPU speedup is
+  smaller but the GPU speedup is roughly unchanged.
+- **`wMax ≤ 2048`** — the CUDA kernel tiles the time axis in
+  shared-memory blocks of 2048 samples; larger windows fall back to a
+  host error. This is not a limit on the CPU paths.
+
+Rule of thumb for a parameter-search workload
+(`wccFindDyadParam` with many surrogates):
+
+- ≤ 5 dyads, single parameter: `method = "c"` is fine.
+- 20–100 dyads, moderate parameter grid: `method = "cumc"` is the
+  right default.
+- 100+ dyads, dense parameter grid, CUDA-capable machine:
+  `method = "cumcuda"` moves a coffee-break workload to real time.
+  When you only need the peaks (not the grids themselves), call
+  `wccCalcPeakBatch` instead of the two-step pipeline, and add
+  `precision = "single"` on consumer cards.
+
+## Session info
+
+```{r session}
+sessionInfo()
+```

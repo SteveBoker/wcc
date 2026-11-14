@@ -72,7 +72,7 @@ for (d in 1:2) {
     s2 <- makeSeries(n)
     for (wMax in c(50, 100)) {
         for (tMax in c(50, 100)) {
-            grid <- wccCalc(s1, s2, wMax=wMax, tMax=tMax)
+            grid <- wccCalc(s1, s2, wMax=wMax, tMax=tMax, method="cumc")
             grid[is.na(grid)] <- 0
             for (type in c("Max", "Min")) {
                 for (pspan in c(.25, .4)) {
@@ -88,7 +88,7 @@ for (d in 1:2) {
 }
 
 # Rows containing NA must yield NA index and value.
-gridNA <- wccCalc(makeSeries(n), makeSeries(n), wMax=50, tMax=50)
+gridNA <- wccCalc(makeSeries(n), makeSeries(n), wMax=50, tMax=50, method="cumc")
 gridNA[is.na(gridNA)] <- 0
 gridNA[5, 17] <- NA
 res <- wccPeakPick(gridNA, Lsize=8, pspan=.25, type="Max")
@@ -100,5 +100,97 @@ key <- paste0(ncol(gridNA), "_", 0.25)
 stopifnot(!is.null(wcc:::.wccPeakPickCache[[key]]))
 t1 <- system.time(wcc:::wccSmoothMatrix(ncol(gridNA), 0.25))["elapsed"]
 stopifnot(t1 < 0.1)
+
+# wccPeakPickBatch (CPU path) must match per-slab wccPeakPick.
+arr1 <- t(sapply(1:3, function(i) makeSeries(n)))
+arr2 <- t(sapply(1:3, function(i) makeSeries(n)))
+grids <- wccCalcBatch(arr1, arr2, wMax=50, tMax=50, method="cumc")
+grids[is.na(grids)] <- 0
+bp <- wccPeakPickBatch(grids, Lsize=8, pspan=.25, type="Max", method="cumc")
+for (p in 1:3) {
+    single <- wccPeakPick(grids[,,p], Lsize=8, pspan=.25, type="Max")
+    stopifnot(sameOrBothNA(bp$index[,p], single$maxIndex, tol=0),
+              sameOrBothNA(bp$value[,p], single$maxValue, tol=0))
+}
+
+# CUDA batch paths (FP64 and FP32) against the CPU batch result.
+cudaAvailable <- tryCatch({
+    wccCalc(rnorm(200), rnorm(200), wMax=20, tMax=20, method="cumcuda")
+    TRUE
+}, error = function(e) FALSE)
+
+if (cudaAvailable) {
+    bg <- wccPeakPickBatch(grids, Lsize=8, pspan=.25, type="Max", method="cumcuda")
+    stopifnot(sameOrBothNA(bg$index, bp$index, tol=0),
+              sameOrBothNA(bg$value, bp$value))
+
+    b32 <- wccPeakPickBatch(grids, Lsize=8, pspan=.25, type="Max",
+                            method="cumcuda", precision="single")
+    stopifnot(all(is.na(b32$index) == is.na(bp$index)))
+    # Peak values within FP32 tolerance everywhere.
+    stopifnot(all(abs(b32$value - bp$value) < 1e-4, na.rm=TRUE))
+    # Indices match except possibly on near-ties, where a shift of one
+    # half-step is acceptable.
+    idxDiff <- abs(b32$index - bp$index)
+    stopifnot(all(idxDiff <= 1, na.rm=TRUE))
+    nShift <- sum(idxDiff > 0, na.rm=TRUE)
+    cat(sprintf("FP32 peak pick: %d/%d indices shifted by one half-step\n",
+                nShift, sum(!is.na(idxDiff))))
+}
+
+# precision="single" must be rejected for method="cumc".
+res <- tryCatch({ wccPeakPickBatch(grids, method="cumc", precision="single"); "no error" },
+                error = function(e) "error")
+stopifnot(res == "error")
+
+# ----------------------------------
+# Fused pipeline: wccCalcPeakBatch must match the two-step pipeline.
+
+fpc <- wccCalcPeakBatch(arr1, arr2, wMax=50, tMax=50, Lsize=8, pspan=.25,
+                        type="Max", method="cumc")
+stopifnot(sameOrBothNA(fpc$index, bp$index, tol=0),
+          sameOrBothNA(fpc$value, bp$value, tol=0))
+
+if (cudaAvailable) {
+    fg <- wccCalcPeakBatch(arr1, arr2, wMax=50, tMax=50, Lsize=8, pspan=.25,
+                           type="Max", method="cumcuda")
+    stopifnot(all(dim(fg$index) == dim(bp$index)),
+              sameOrBothNA(fg$index, bp$index, tol=0),
+              sameOrBothNA(fg$value, bp$value))
+
+    # Repeated calls must keep working (persistent buffers/handle reuse).
+    fg2 <- wccCalcPeakBatch(arr1, arr2, wMax=50, tMax=50, Lsize=8, pspan=.25,
+                            type="Max", method="cumcuda")
+    stopifnot(identical(fg, fg2))
+
+    # A smaller follow-up problem must not read stale buffer tails.
+    fgSmall <- wccCalcPeakBatch(arr1[1:2, 1:600], arr2[1:2, 1:600],
+                                wMax=30, tMax=30, Lsize=8, pspan=.25,
+                                type="Max", method="cumcuda")
+    fgSmallRef <- wccCalcPeakBatch(arr1[1:2, 1:600], arr2[1:2, 1:600],
+                                   wMax=30, tMax=30, Lsize=8, pspan=.25,
+                                   type="Max", method="cumc")
+    stopifnot(sameOrBothNA(fgSmall$index, fgSmallRef$index, tol=0),
+              sameOrBothNA(fgSmall$value, fgSmallRef$value))
+
+    # FP32 fused path within tolerance.
+    f32 <- wccCalcPeakBatch(arr1, arr2, wMax=50, tMax=50, Lsize=8, pspan=.25,
+                            type="Max", method="cumcuda", precision="single")
+    stopifnot(all(abs(f32$value - bp$value) < 1e-4, na.rm=TRUE),
+              all(abs(f32$index - bp$index) <= 1, na.rm=TRUE))
+
+    # "Min" must agree with the two-step CPU pipeline too.
+    bpMin <- wccPeakPickBatch(grids, Lsize=8, pspan=.25, type="Min", method="cumc")
+    fgMin <- wccCalcPeakBatch(arr1, arr2, wMax=50, tMax=50, Lsize=8, pspan=.25,
+                              type="Min", method="cumcuda")
+    stopifnot(sameOrBothNA(fgMin$index, bpMin$index, tol=0),
+              sameOrBothNA(fgMin$value, bpMin$value))
+    cat("Fused wccCalcPeakBatch (cumcuda) matches the two-step pipeline.\n")
+}
+
+# precision="single" must be rejected for method="cumc" in the fused path.
+res <- tryCatch({ wccCalcPeakBatch(arr1, arr2, method="cumc", precision="single"); "no error" },
+                error = function(e) "error")
+stopifnot(res == "error")
 
 cat("All wccPeakPick tests passed.\n")

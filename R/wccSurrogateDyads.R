@@ -32,7 +32,7 @@
 
 
 
-wccSurrogateDyads <- function(inArray1=NA, inArray2=NA, wMax=50, tMax=50, wInc=1, tInc=1, Lsize=8, pspan=.25, type="Max", nSurrogates=NA, method=c("c", "cumr", "cumc", "r"), embedD=9, ...) {
+wccSurrogateDyads <- function(inArray1=NA, inArray2=NA, wMax=50, tMax=50, wInc=1, tInc=1, Lsize=8, pspan=.25, type="Max", nSurrogates=NA, method=c("c", "cumr", "cumc", "cumcuda", "r"), embedD=9, ...) {
     # Deprecation: allow old windcross argument
     dots <- list(...)
     if ("windcross" %in% names(dots)) {

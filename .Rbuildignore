@@ -1,0 +1,5 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^\.claude$
+^\.claude/
+^VIGNETTE_BRIEFING\.md$

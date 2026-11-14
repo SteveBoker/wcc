@@ -32,7 +32,7 @@
 
 
 wccFindDyadParam <- function(inArray1=NA, inArray2=NA, wMaxvector=c(50), tMaxvector=c(50), wIncvector=c(1), tIncvector=c(1),
-                             Lsizevector=c(8), pspanvector=c(.25), type="Max", nSurrogates=NA, samplespersecond=1, method=c("c", "cumr", "cumc", "r"), embedD=9, ...) {
+                             Lsizevector=c(8), pspanvector=c(.25), type="Max", nSurrogates=NA, samplespersecond=1, method=c("c", "cumr", "cumc", "cumcuda", "r"), embedD=9, ...) {
     # Deprecation: allow old windcross argument
     dots <- list(...)
     if ("windcross" %in% names(dots)) {
@@ -81,7 +81,7 @@ wccFindDyadParam <- function(inArray1=NA, inArray2=NA, wMaxvector=c(50), tMaxvec
     # Batched path: surrogate pairings are drawn once and reused for every
     # parameter combination; real dyads and surrogates are computed together
     # in a single wccCalcBatch call per (wInc, wMax, tMax, tInc) combination.
-    useBatch <- method %in% c("cumc")
+    useBatch <- method %in% c("cumc", "cumcuda")
     if (useBatch) {
         if (anyNA(inArray1) || anyNA(inArray2)) {
             stop(paste0("Warning: method \"", method, "\" does not support missing data. Use method=\"c\" or method=\"r\"."))

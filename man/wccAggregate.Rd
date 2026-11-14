@@ -25,7 +25,7 @@ This function runs \code{wccCalc} and peakpicking on a pair of time series and r
 \usage{
 wccAggregate(inSeries1=NA, inSeries2=NA, wMax=50, tMax=50, wInc=1, tInc=1, Lsize=8,
      pspan=.25, type="Max", samplespersecond=1,
-     method=c("c", "cumr", "cumc", "r"), embedD=9, ...)
+     method=c("c", "cumr", "cumc", "cumcuda", "r"), embedD=9, ...)
 }
 
 \arguments{
@@ -39,7 +39,7 @@ wccAggregate(inSeries1=NA, inSeries2=NA, wMax=50, tMax=50, wInc=1, tInc=1, Lsize
 \item{pspan}{A numeric specifying the amount of smoothing applied by the \code{\link{loess}} function within \code{wccPeakPick}  (default=.25).}
 \item{type}{A character string indicating whether a maximum, \sQuote{Max}, or minimum, \sQuote{Min}, should be detected by \code{wccPeakPick} (default="Max").}
 \item{samplespersecond}{A numeric indicating the sampling rate of the time series.  This will determine the units of the first derivative aggregate statistics. (default=1)}
-\item{method}{Backend passed through to \code{\link{wccCalc}}: \code{"c"} (default, original compiled windcross), \code{"r"} (original pure-R loop), \code{"cumc"} (cumulative-sum C backend), or \code{"cumr"} (cumulative-sum pure-R reference).  See \code{\link{wccCalc}} for details and the missing-data caveat for the \code{cum*} methods.}
+\item{method}{Backend passed through to \code{\link{wccCalc}}: \code{"c"} (default, original compiled windcross), \code{"r"} (original pure-R loop), \code{"cumc"} (cumulative-sum C backend), \code{"cumr"} (cumulative-sum pure-R reference), or \code{"cumcuda"} (cumulative-sum CUDA backend, requires a CUDA-enabled build).  See \code{\link{wccCalc}} for details and the missing-data caveat for the \code{cum*} methods.}
 \item{embedD}{A numeric indicating the embedding dimension passed to GLLAEmbed to calculate derivatives of the peak picking lag timeseries.  The default (9) will provide a medium smooth at the cost of some loss of resolution in the timing of jumps in the second derivative.  The smallest legal value is 5, which provides less smoothing and the best time resolution.  If your sampling rate is low, then a smaller value of embedD is useful, while if your sampling rate is high, a larger value of embedD will provide better noise rejection by smoothing.}
 \item{...}{Reserved for the deprecated \code{windcross=TRUE/FALSE} argument, mapped to \code{method="c"} / \code{method="r"} with a warning.}
 }

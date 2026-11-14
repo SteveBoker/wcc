@@ -57,7 +57,7 @@
 # ---------------------------------------------------------------------
 
 
-wccAggregate <- function(inSeries1=NA, inSeries2=NA, wMax=50, tMax=50, wInc=1, tInc=1, Lsize=8, pspan=.25, type="Max", samplespersecond=1, method=c("c", "cumr", "cumc", "r"), embedD=9, ...) {
+wccAggregate <- function(inSeries1=NA, inSeries2=NA, wMax=50, tMax=50, wInc=1, tInc=1, Lsize=8, pspan=.25, type="Max", samplespersecond=1, method=c("c", "cumr", "cumc", "cumcuda", "r"), embedD=9, ...) {
 
     # Deprecation: allow old windcross argument
     dots <- list(...)

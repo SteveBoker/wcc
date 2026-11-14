@@ -37,7 +37,7 @@
 library(pheatmap)
 library(gtable)
 
-wccPlot <- function(inSeries1=NA, inSeries2=NA, startwindow=1, endwindow=200, wMax=50, tMax=50, wInc=1, tInc=1, Lsize=8, pspan=.25, type="Max", samplespersecond=1, method=c("c", "cumr", "cumc", "r"), ...) {
+wccPlot <- function(inSeries1=NA, inSeries2=NA, startwindow=1, endwindow=200, wMax=50, tMax=50, wInc=1, tInc=1, Lsize=8, pspan=.25, type="Max", samplespersecond=1, method=c("c", "cumr", "cumc", "cumcuda", "r"), ...) {
 
     # Deprecation: allow old windcross argument
     dots <- list(...)

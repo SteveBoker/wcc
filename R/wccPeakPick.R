@@ -171,3 +171,52 @@ wccPeakPick <- function(tAllCor=NA, Lsize=8, pspan=.25, type="Max") {
     return(list(maxIndex=tIndex, maxValue=tValue))
 }
 
+# ----------------------------------
+# Batched peak picking over a 3-D array of WCC grids (nRow x nCol x P),
+# as returned by wccCalcBatch.  method="cumc" runs the fast CPU path per
+# slab; method="cumcuda" smooths all slabs with one batched GEMM on the
+# GPU and runs the search kernel there (requires a CUDA-enabled build).
+# Returns list(index, value): two nRow x P matrices.
+
+wccPeakPickBatch <- function(grids, Lsize=8, pspan=.25, type="Max", method=c("cumc", "cumcuda"),
+                             precision=c("double", "single")) {
+    method <- match.arg(method)
+    precision <- match.arg(precision)
+    if (precision == "single" && method != "cumcuda") {
+        stop("precision=\"single\" is only supported with method=\"cumcuda\".")
+    }
+    if (!is.array(grids) || length(dim(grids)) != 3) {
+        stop("grids must be a 3-dimensional array (nRow x nCol x P).")
+    }
+    nRow <- dim(grids)[1]
+    colLen <- dim(grids)[2]
+    P <- dim(grids)[3]
+    findMin <- (type=="Min" || type=="min")
+
+    if (method == "cumcuda") {
+        if (anyNA(grids)) {
+            stop("method \"cumcuda\" does not support NA cells; replace them before peak picking.")
+        }
+        M <- wccSmoothMatrix(colLen, pspan)
+        res <- .Call("wccpeakpick_cuda_batch", grids, M,
+                     as.numeric(Lsize), as.numeric(!findMin),
+                     as.integer(precision == "single"), PACKAGE = "wcc")
+        return(list(index=matrix(res[[1]], nrow=nRow, ncol=P),
+                    value=matrix(res[[2]], nrow=nRow, ncol=P)))
+    }
+
+    index <- matrix(NA_real_, nrow=nRow, ncol=P)
+    value <- matrix(NA_real_, nrow=nRow, ncol=P)
+    for (p in 1:P) {
+        ppOut <- wccPeakPick(grids[,,p], Lsize=Lsize, pspan=pspan, type=type)
+        if (findMin) {
+            index[,p] <- ppOut$minIndex
+            value[,p] <- ppOut$minValue
+        }
+        else {
+            index[,p] <- ppOut$maxIndex
+            value[,p] <- ppOut$maxValue
+        }
+    }
+    list(index=index, value=value)
+}

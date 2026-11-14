@@ -1,2 +1,2 @@
 testSine     This demo file creates an array of 10 pairs of dyadic timeseries and then uses all of the functions in the wcc package to test them.
-benchmarkWCC     Benchmarks the wccCalc backends (cumr, cumc, c, r) and reports speedups relative to the original C implementation.
+benchmarkWCC     Benchmarks the wccCalc backends (cumr, cumc, cumcuda, c, r) and reports speedups relative to the original C implementation.

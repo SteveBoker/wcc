@@ -24,7 +24,8 @@ This function calculates a windowed cross correlation matrix from two time serie
 
 \usage{
 wccCalc(inSeries1, inSeries2, wMax=50, tMax=50, wInc=1, tInc=1,
-        method=c("c", "cumr", "cumc", "r"), ...)
+        method=c("c", "cumr", "cumc", "cumcuda", "r"),
+        precision=c("double", "single"), ...)
 }
 
 \arguments{
@@ -34,7 +35,8 @@ wccCalc(inSeries1, inSeries2, wMax=50, tMax=50, wInc=1, tInc=1,
 \item{tMax}{The maximum number of samples to lag the windows (default=50).  The cross correlation is calculated for windows that are time lagged against each other, allowing for processes than require some time to evolve.  For instance, if the two time series are from motion capture of two individuals conversing with one another, the speaker's movements are likely to occur prior to the responses of the listener.  tMax should be set to be greater than the number of samples that represents the maximum time lag that is likely to occur. }
 \item{wInc}{The number of samples incremented between successive windows  (default=1).  This is most often set to 1.  If the sample rate is very high and the time series is long, wInc may be increased.  However, \code{wccCalc}'s maximum sensitivity to nonstationary change in the time series occurs when wInc is 1.}
 \item{tInc}{The number of samples incremented between successive lags  (default=1).  This is most often set to 1.  If the sample rate is high and the maximum lag is high then tInc may be increased.  However, \code{wccCalc}'s maximum sensitivity to changes in lags occurs when the tInc is set to 1.}
-\item{method}{Backend selector for the windowed cross correlation.  \code{"c"} (default) calls the original compiled \code{windcross} binary; \code{"r"} is the original pure-R loop.  \code{"cumc"} uses a cumulative-sum C backend that computes each cell in O(1) from prefix sums, giving O(n * nLags) cost independent of window size; \code{"cumr"} is the pure-R reference for that algorithm.  The \code{cum*} methods do not support missing data: any NA in the input is an error.  When \code{tInc > 1} the \code{cum*} methods use lags \code{0, tInc, 2*tInc, ..., tMax}, matching \code{"c"}; the legacy \code{"r"} method shifts by the column index instead.}
+\item{method}{Backend selector for the windowed cross correlation.  \code{"c"} (default) calls the original compiled \code{windcross} binary; \code{"r"} is the original pure-R loop.  \code{"cumc"} uses a cumulative-sum C backend that computes each cell in O(1) from prefix sums, giving O(n * nLags) cost independent of window size; \code{"cumr"} is the pure-R reference for that algorithm.  \code{"cumcuda"} runs the same cumulative-sum algorithm on the GPU and requires an installation built with CUDA support (see \code{src/Makevars}); without it the call raises an informative error.  The \code{cum*} methods do not support missing data: any NA in the input is an error.  When \code{tInc > 1} the \code{cum*} methods use lags \code{0, tInc, 2*tInc, ..., tMax}, matching \code{"c"}; the legacy \code{"r"} method shifts by the column index instead.}
+\item{precision}{Floating-point precision of the GPU computation; only valid with \code{method="cumcuda"}.  \code{"double"} (default) computes in FP64.  \code{"single"} computes in FP32, which is substantially faster on consumer GPUs (whose FP64 throughput is a small fraction of FP32) at the cost of correlations accurate to roughly 1e-5 rather than machine precision.  Results are always returned as R doubles.}
 \item{...}{Reserved for the deprecated \code{windcross=TRUE/FALSE} argument, mapped to \code{method="c"} / \code{method="r"} with a warning.}
 }
 

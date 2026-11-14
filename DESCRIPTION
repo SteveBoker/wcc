@@ -33,12 +33,17 @@ Imports:
     pheatmap,
     grid,
     gtable
+Suggests:
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
 LazyLoad: yes
 LazyData: yes
 Collate:
     'GLLAfunctions.R'
     'wccCalc.R'
     'wccCalcBatch.R'
+    'wccCalcPeakBatch.R'
     'wccAggregate.R'
     'wccFindDyadParam.R'
     'wccHeatMap.R'

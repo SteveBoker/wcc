@@ -1,7 +1,40 @@
-# NOTE: because this file mentions OBJECTS, R does not generate its own
-# object list, so it must be defined here.
-OBJECTS = corr.o init.o windcross.o windcrosscum.o
+# Optional CUDA backend for method="cumcuda".
+#
+# By default the package builds CPU-only; windcrosscum_cuda_stub.c provides
+# an entry point that raises an informative error.  To enable the CUDA
+# backend, set CUDA_HOME to the CUDA toolkit root (so that
+# $(CUDA_HOME)/bin/nvcc exists) before R CMD INSTALL, or have nvcc on
+# PATH so this file can auto-detect it.  This path is intended for
+# Linux; on Windows, mixing nvcc/MSVC objects with the Rtools (MinGW)
+# toolchain is not supported.
+
+# Auto-detect CUDA if CUDA_HOME not set
+ifndef CUDA_HOME
+NVCC_PATH := $(shell which nvcc 2>/dev/null)
+ifneq ($(NVCC_PATH),)
+CUDA_HOME := $(patsubst %/bin/nvcc,%,$(NVCC_PATH))
+endif
+endif
 
 # OpenMP for the batched pair loop in windcrosscum.c.
 PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS)
 PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)
+
+ifdef CUDA_HOME
+
+# NOTE: stub is excluded when CUDA is available - the real .cu file provides those entry points.
+OBJECTS = corr.o init.o windcross.o windcrosscum.o windcrosscum_cuda.o
+PKG_CPPFLAGS = -DHAVE_CUDA
+# Cover both RHEL/CentOS-style (lib64) and Debian-multiarch (lib/x86_64-linux-gnu)
+# layouts; the linker picks whichever exists.
+PKG_LIBS += -L"$(CUDA_HOME)/lib64" -L"$(CUDA_HOME)/lib/x86_64-linux-gnu" -L"$(CUDA_HOME)/lib" -lcudart -lcublas
+
+NVCC = $(CUDA_HOME)/bin/nvcc
+%.o: %.cu
+	$(NVCC) -O2 -std=c++11 -Xcompiler -fPIC -I"$(R_HOME)/include" -c $< -o $@
+
+else
+
+OBJECTS = corr.o init.o windcross.o windcrosscum.o windcrosscum_cuda_stub.o
+
+endif

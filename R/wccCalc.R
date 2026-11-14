@@ -24,6 +24,7 @@
 # Backends are selected with the method argument:
 #   "cumr"    -- cumulative-sum algorithm, pure R (default)
 #   "cumc"    -- cumulative-sum algorithm, C
+#   "cumcuda" -- cumulative-sum algorithm, CUDA (requires a CUDA-enabled build)
 #   "c"       -- original C implementation (windcross)
 #   "r"       -- original pure-R loop
 #
@@ -46,7 +47,8 @@
 # Calculate WCC.
 
 wccCalc <- function(inSeries1, inSeries2, wMax=50, tMax=50, wInc=1, tInc=1,
-                    method=c("c", "cumr", "cumc", "r"), ...) {
+                    method=c("c", "cumr", "cumc", "cumcuda", "r"),
+                    precision=c("double", "single"), ...) {
     # Deprecation: allow old windcross argument
     dots <- list(...)
     if ("windcross" %in% names(dots)) {
@@ -54,6 +56,10 @@ wccCalc <- function(inSeries1, inSeries2, wMax=50, tMax=50, wInc=1, tInc=1,
         method <- if (isTRUE(dots$windcross)) "c" else "r"
     } else {
         method <- match.arg(method)
+    }
+    precision <- match.arg(precision)
+    if (precision == "single" && method != "cumcuda") {
+        stop(paste0("Warning: precision=\"single\" is only supported with method=\"cumcuda\"."))
     }
     if (!is.numeric(inSeries1) | !is.numeric(inSeries2) | !is.vector(inSeries1) | !is.vector(inSeries2) | length(inSeries1) != length(inSeries2)) {
         stop(paste0("Warning: inSeries1 and inSeries2 must be numeric vectors of equal length."))
@@ -76,7 +82,7 @@ wccCalc <- function(inSeries1, inSeries2, wMax=50, tMax=50, wInc=1, tInc=1,
     if (nCol < 0) {
         stop(paste0("Warning: bad choice for tMax and/or tInc  parameters. The result matrix has ", nCol, " columns."))
     }
-    if (method %in% c("cumr", "cumc")) {
+    if (method %in% c("cumr", "cumc", "cumcuda")) {
         if (anyNA(inSeries1) || anyNA(inSeries2)) {
             stop(paste0("Warning: method \"", method, "\" does not support missing data. Use method=\"c\" or method=\"r\"."))
         }
@@ -86,6 +92,9 @@ wccCalc <- function(inSeries1, inSeries2, wMax=50, tMax=50, wInc=1, tInc=1,
     }
     if (method == "cumc") {
         return(.Call("windcrosscum", as.numeric(inSeries1), as.numeric(inSeries2), as.numeric(wMax), as.numeric(tMax), as.numeric(wInc), as.numeric(tInc), PACKAGE = "wcc"))
+    }
+    if (method == "cumcuda") {
+        return(.Call("windcrosscum_cuda", as.numeric(inSeries1), as.numeric(inSeries2), as.numeric(wMax), as.numeric(tMax), as.numeric(wInc), as.numeric(tInc), as.integer(precision == "single"), PACKAGE = "wcc"))
     }
     if (method == "c") {
         tData <- .Call("windcross", as.numeric(inSeries1), as.numeric(inSeries2), as.numeric(wMax), as.numeric(tMax), as.numeric(wInc), as.numeric(tInc), PACKAGE = "wcc")

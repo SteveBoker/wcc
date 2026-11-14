@@ -34,10 +34,15 @@
 
 wccCalcBatch <- function(seriesArray1, seriesArray2, pairs=NULL,
                          wMax=50, tMax=50, wInc=1, tInc=1,
-                         method=c("cumc")) {
-    # Note: wccCalcBatch only supports batched backends. Use method="cumc"
-    # for the batched C backend.
+                         method=c("cumc", "cumcuda"),
+                         precision=c("double", "single")) {
+    # Note: wccCalcBatch only supports batched backends (cumc/cumcuda),
+    # not the single-dyad paths. Use method="cumc" for the default batched C backend.
     method <- match.arg(method)
+    precision <- match.arg(precision)
+    if (precision == "single" && method != "cumcuda") {
+        stop(paste0("Warning: precision=\"single\" is only supported with method=\"cumcuda\"."))
+    }
     if (!is.numeric(seriesArray1) | !is.numeric(seriesArray2) | !is.matrix(seriesArray1) | !is.matrix(seriesArray2)) {
         stop(paste0("Warning: seriesArray1 and seriesArray2 must be numeric matrices."))
     }
@@ -70,7 +75,14 @@ wccCalcBatch <- function(seriesArray1, seriesArray2, pairs=NULL,
     storage.mode(seriesArray1) <- "double"
     storage.mode(seriesArray2) <- "double"
 
-    .Call("windcrosscum_batch", seriesArray1, seriesArray2, pairs,
-          as.numeric(wMax), as.numeric(tMax), as.numeric(wInc), as.numeric(tInc),
-          PACKAGE = "wcc")
+    if (method == "cumc") {
+        .Call("windcrosscum_batch", seriesArray1, seriesArray2, pairs,
+              as.numeric(wMax), as.numeric(tMax), as.numeric(wInc), as.numeric(tInc),
+              PACKAGE = "wcc")
+    } else {
+        .Call("windcrosscum_cuda_batch", seriesArray1, seriesArray2, pairs,
+              as.numeric(wMax), as.numeric(tMax), as.numeric(wInc), as.numeric(tInc),
+              as.integer(precision == "single"),
+              PACKAGE = "wcc")
+    }
 }
